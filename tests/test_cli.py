@@ -113,8 +113,20 @@ def test_explain_sends_finding_and_strips_thinking(tmp_path, monkeypatch):
     assert sent["url"] == "https://example.test/v1/chat/completions"
     assert sent["auth"] == "Bearer k"
     assert sent["body"]["model"] == "m"
+    assert sent["body"]["chat_template_kwargs"] == {"enable_thinking": False}
     assert "> " in sent["body"]["messages"][1]["content"]
     assert "model.fit(X_test, y_test)" in sent["body"]["messages"][1]["content"]
+
+
+def test_explain_empty_answer_is_an_error(tmp_path, monkeypatch):
+    path = write(tmp_path, "a.py", "model.fit(X_test, y_test)\n")
+    finding = Finding("PX006", "high", 1, "trained on test", load(path))
+    reply = {"choices": [{"finish_reason": "length",
+                          "message": {"content": None, "reasoning_content": "..."}}]}
+    monkeypatch.setattr(explain.urllib.request, "urlopen",
+                        lambda request, timeout: FakeResponse(json.dumps(reply).encode()))
+    with pytest.raises(explain.ExplainError, match="ran out of tokens"):
+        explain.explain(finding, api_key="k")
 
 
 def test_explain_http_error(tmp_path, monkeypatch):
