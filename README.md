@@ -94,7 +94,28 @@ pariksha --explain
 For each finding (highest severity first, five by default, `--max-explain N` to change),
 pariksha calls BharatCode's OpenAI-compatible chat API with the default model `qwen-3.8-27b`
 and prints a short explanation plus a corrected version of the marked lines under the finding.
-`BHARATCODE_MODEL` and `BHARATCODE_BASE_URL` override the model and endpoint.
+`BHARATCODE_MODEL` and `BHARATCODE_BASE_URL` override the model and endpoint. The model's
+step-by-step reasoning mode is switched off for these calls: with it on, Qwen used its whole
+token budget on reasoning and returned no answer, while with it off each explanation took a
+few seconds.
+
+A real response, for the `MinMaxScaler().fit_transform(X_test)` line in the Keras example:
+
+```text
+examples/leaky_project/train_keras.py:13  HIGH    PX006  Fitting on test data
+    MinMaxScaler is fitted on `X_test`, so the test data is scaled with its own statistics instead of the ones learned from training data.
+    > X_test = MinMaxScaler().fit_transform(X_test)
+    fix: Fit only on training data. For test data call transform() / predict() with the already-fitted object.
+    explanation (BharatCode):
+      Fitting a new scaler on the test set leaks information about the test data's distribution into the preprocessing step. This means the test data is scaled using its own min/max values rather than the training set's, which is not how the model would be deployed in production. Consequently, the reported test accuracy is artificially inflated and does not reflect true generalization performance. You should reuse the scaler already fitted on the training data to transform the test data.
+
+      ```python
+      X_test = scaler.transform(X_test)
+      ```
+```
+
+The explanation is model output, so read it as advice: in this case "artificially inflated" is
+not guaranteed, since a test set scaled on its own can also score lower.
 
 What is sent: the rule, the finding message and the 13 lines around the finding. Nothing else
 from the project leaves the machine, and without `--explain` no network call is made. Without
