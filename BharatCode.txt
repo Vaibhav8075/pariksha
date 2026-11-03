@@ -1,0 +1,13 @@
+Project: pariksha
+Event: BharatCode Build League 2026
+Direction: Coding & developer tools
+Author: Vaibhav Goel (GitHub: Vaibhav8075)
+
+pariksha is a command-line checker that finds evaluation mistakes in machine-learning code and
+Jupyter notebooks: data leakage before the train/test split, the test set used for early stopping
+or model selection, scoring on training data, missing model.eval(), and unseeded randomness.
+
+BharatCode use: `pariksha --explain` sends each finding, with the few lines of code around it, to the
+BharatCode API (OpenAI-compatible chat completions, default model qwen-3.8-27b) and prints a
+plain-language explanation and a corrected version of the code under the finding.
+Set BHARATCODE_API_KEY in the environment or in a .env file (see .env.example).
