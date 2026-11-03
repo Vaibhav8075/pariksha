@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pariksha"
+dynamic = ["version"]
+description = "Find data leakage, test-set reuse and other evaluation mistakes in ML code and notebooks"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Vaibhav Goel" }]
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["machine-learning", "data-leakage", "static-analysis", "pytorch", "scikit-learn"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/Vaibhav8075/pariksha"
+
+[project.scripts]
+pariksha = "pariksha.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["pariksha"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pariksha.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
