@@ -282,9 +282,44 @@ def check_test_used_for_selection(tree: ast.Module, text: str) -> list[Finding]:
     return out
 
 
+# --------------------------------------------------------------------------- PX003
+
+def check_eval_on_train_data(tree: ast.Module) -> list[Finding]:
+    out = []
+    for scope in scopes(tree):
+        fitted: dict[str, tuple[str, int]] = {}
+        for call in calls_in(scope):
+            name = func_name(call)
+            receiver = dotted(call.func.value) if isinstance(call.func, ast.Attribute) else None
+            if name == "fit" and receiver and call.args:
+                fitted[receiver] = (ast.dump(call.args[0]), call.lineno)
+                continue
+            scored: list[ast.Call] = []
+            if name == "score" and receiver:
+                scored = [call]
+            elif name in METRICS:
+                scored = [s for s in ast.walk(call) if isinstance(s, ast.Call)
+                          and func_name(s) in PREDICT_METHODS and isinstance(s.func, ast.Attribute)]
+            for s in scored:
+                model = dotted(s.func.value)
+                if model not in fitted or not s.args:
+                    continue
+                data_dump, fit_line = fitted[model]
+                if ast.dump(s.args[0]) != data_dump or any(is_train_name(n) for n in names(s.args[0])):
+                    continue
+                out.append(Finding(
+                    "PX003", "high", call.lineno,
+                    f"`{model}` is scored on `{ast.unparse(s.args[0])}`, the same data it was "
+                    f"fitted on at line {fit_line}. This measures memorisation, not how it "
+                    "does on new data."))
+                break
+    return out
+
+
 def run_file_checks(tree: ast.Module, text: str) -> list[Finding]:
     return [
         *check_preprocess_before_split(tree),
         *check_fit_on_test(tree),
         *check_test_used_for_selection(tree, text),
+        *check_eval_on_train_data(tree),
     ]
