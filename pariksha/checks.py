@@ -246,8 +246,45 @@ def check_fit_on_test(tree: ast.Module) -> list[Finding]:
     return out
 
 
+# --------------------------------------------------------------------------- PX002
+
+def check_test_used_for_selection(tree: ast.Module, text: str) -> list[Finding]:
+    selects = bool(EARLY_STOPPING.search(text))
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                test = sorted(n for n in names(kw.value) if is_test_name(n))
+                if kw.arg in SELECTION_KWARGS and test:
+                    out.append(Finding(
+                        "PX002", "high" if selects else "medium", kw.value.lineno,
+                        f"`{kw.arg}` is given `{test[0]}`. The test set then guides training "
+                        "(early stopping, checkpoints, tuning), so its score is no longer an "
+                        "unbiased estimate. If this is really a validation set, rename it."))
+            if is_method_call(node, "step") and node.args:
+                test = sorted(n for n in names(node.args[0]) if is_test_name(n))
+                if test:
+                    out.append(Finding(
+                        "PX002", "high", node.lineno,
+                        f"The learning-rate scheduler is stepped with `{test[0]}`, so a "
+                        "test-set metric is steering training."))
+        elif isinstance(node, ast.If) and isinstance(node.test, ast.Compare):
+            compared = names(node.test)
+            test = sorted(n for n in compared if is_test_name(n))
+            if not test or not any("best" in n.lower() for n in compared):
+                continue
+            saves = any(isinstance(n, ast.Call) and func_name(n) in SAVE_CALLS
+                        for stmt in node.body for n in ast.walk(stmt))
+            out.append(Finding(
+                "PX002", "high" if saves else "medium", node.lineno,
+                f"The best model/epoch is picked by comparing `{test[0]}`. Reporting that same "
+                "test score afterwards overstates how well the model generalises."))
+    return out
+
+
 def run_file_checks(tree: ast.Module, text: str) -> list[Finding]:
     return [
         *check_preprocess_before_split(tree),
         *check_fit_on_test(tree),
+        *check_test_used_for_selection(tree, text),
     ]
