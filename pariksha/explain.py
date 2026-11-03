@@ -60,6 +60,9 @@ def explain(finding: Finding, *, api_key: str, base_url: str = DEFAULT_BASE_URL,
         ],
         "temperature": 0.2,
         "max_tokens": 700,
+        # Qwen reasons at length before answering and used the whole budget in testing;
+        # the explanation is short, so ask for the answer directly.
+        "chat_template_kwargs": {"enable_thinking": False},
     }
     request = urllib.request.Request(
         base_url.rstrip("/") + "/chat/completions",
@@ -75,11 +78,17 @@ def explain(finding: Finding, *, api_key: str, base_url: str = DEFAULT_BASE_URL,
     except (urllib.error.URLError, TimeoutError) as err:
         raise ExplainError(f"could not reach the BharatCode API: {err}") from None
     try:
-        text = data["choices"][0]["message"]["content"] or ""
+        choice = data["choices"][0]
+        text = choice["message"]["content"] or ""
     except (KeyError, IndexError, TypeError):
         raise ExplainError("unexpected response from the BharatCode API") from None
     # Reasoning models may prepend their thinking; keep only the answer.
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    if not text:
+        reason = choice.get("finish_reason")
+        raise ExplainError("the model returned no answer"
+                           + (" (it ran out of tokens)" if reason == "length" else ""))
+    return text
 
 
 def settings() -> tuple[str | None, str, str]:
