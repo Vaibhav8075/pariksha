@@ -316,10 +316,43 @@ def check_eval_on_train_data(tree: ast.Module) -> list[Finding]:
     return out
 
 
+# --------------------------------------------------------------------------- PX004
+
+def _kw(call: ast.Call, name: str) -> ast.AST | None:
+    return next((k.value for k in call.keywords if k.arg == name), None)
+
+
+def check_unseeded_splits(tree: ast.Module) -> list[Finding]:
+    out = []
+    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+        name = func_name(call)
+        if any(k.arg is None for k in call.keywords) or _kw(call, "random_state") is not None:
+            continue
+        shuffle = _kw(call, "shuffle")
+        shuffled = isinstance(shuffle, ast.Constant) and shuffle.value is True
+        if name == "train_test_split" and not (isinstance(shuffle, ast.Constant) and shuffle.value is False):
+            what = "train_test_split has no random_state, so every run gets a different split"
+        elif name in SHUFFLE_SPLITTERS or (name in KFOLD_SPLITTERS and shuffled):
+            what = f"{name} shuffles without a random_state, so the folds change on every run"
+        else:
+            continue
+        out.append(Finding("PX004", "low", call.lineno,
+                           f"{what} and the reported numbers cannot be reproduced exactly."))
+    return out
+
+
+def torch_seed_facts(tree: ast.Module) -> tuple[int | None, bool]:
+    """(line of the first .backward() call, whether any seeding call exists) for one file."""
+    backward = [n.lineno for n in ast.walk(tree) if is_method_call(n, "backward")]
+    seeded = any(isinstance(n, ast.Call) and func_name(n) in SEED_CALLS for n in ast.walk(tree))
+    return (min(backward) if backward else None), seeded
+
+
 def run_file_checks(tree: ast.Module, text: str) -> list[Finding]:
     return [
         *check_preprocess_before_split(tree),
         *check_fit_on_test(tree),
         *check_test_used_for_selection(tree, text),
         *check_eval_on_train_data(tree),
+        *check_unseeded_splits(tree),
     ]
