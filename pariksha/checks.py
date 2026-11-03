@@ -348,6 +348,75 @@ def torch_seed_facts(tree: ast.Module) -> tuple[int | None, bool]:
     return (min(backward) if backward else None), seeded
 
 
+# --------------------------------------------------------------------------- PX005 / PX007
+
+def _has_no_grad(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    guards = {"no_grad", "inference_mode"}
+    for dec in func.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if (dotted(target) or "").split(".")[-1] in guards:
+            return True
+    for node in walk_scope(func):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                expr = item.context_expr
+                if isinstance(expr, ast.Call) and func_name(expr) in guards:
+                    return True
+    return False
+
+
+def check_eval_without_eval_mode(tree: ast.Module) -> list[Finding]:
+    # A method is fine if any method of its class switches to eval mode (often __init__ or load).
+    owner = {id(f): cls for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef)
+             for f in cls.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    out = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not EVAL_FUNC_NAME.search(func.name) or not _has_no_grad(func):
+            continue
+        if any(is_method_call(n, "eval", 0) for n in ast.walk(owner.get(id(func), func))):
+            continue
+        out.append(Finding(
+            "PX005", "medium", func.lineno,
+            f"`{func.name}()` runs under torch.no_grad() but never calls model.eval(), so "
+            "dropout stays active and batch-norm keeps updating its statistics during "
+            "evaluation. Ignore this if every caller already calls model.eval()."))
+    return out
+
+
+def check_train_mode_not_restored(tree: ast.Module) -> list[Finding]:
+    functions = {n.name: n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def reach(loop: ast.AST) -> list[ast.AST]:
+        """Nodes in the loop plus nodes of the module's functions it calls (one level)."""
+        nodes = list(ast.walk(loop))
+        for n in list(nodes):
+            if isinstance(n, ast.Call):
+                callee = functions.get(func_name(n))
+                if callee is not None and callee is not loop:
+                    nodes.extend(ast.walk(callee))
+        return nodes
+
+    out, flagged = [], []
+    loops = sorted((n for n in ast.walk(tree) if isinstance(n, (ast.For, ast.While))), key=pos)
+    for loop in loops:
+        if any(lo <= loop.lineno <= hi for lo, hi in flagged):
+            continue
+        nodes = reach(loop)
+        backward = [n for n in nodes if is_method_call(n, "backward")]
+        evals = [n for n in nodes if is_method_call(n, "eval", 0)]
+        if backward and evals and not any(is_method_call(n, "train") for n in nodes):
+            flagged.append((loop.lineno, loop.end_lineno or loop.lineno))
+            out.append(Finding(
+                "PX007", "medium", loop.lineno,
+                f"This training loop switches the model to eval mode (line "
+                f"{min(e.lineno for e in evals)}) but never calls model.train(), so after the "
+                "first evaluation training continues with dropout and batch-norm turned off."))
+    return out
+
+
 def run_file_checks(tree: ast.Module, text: str) -> list[Finding]:
     return [
         *check_preprocess_before_split(tree),
@@ -355,4 +424,6 @@ def run_file_checks(tree: ast.Module, text: str) -> list[Finding]:
         *check_test_used_for_selection(tree, text),
         *check_eval_on_train_data(tree),
         *check_unseeded_splits(tree),
+        *check_eval_without_eval_mode(tree),
+        *check_train_mode_not_restored(tree),
     ]
